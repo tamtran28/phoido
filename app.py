@@ -1,3 +1,4 @@
+st.write("SHEET_ID Streamlit đang đọc:", st.secrets["SHEET_ID"])
 import streamlit as st
 import hashlib
 import json
