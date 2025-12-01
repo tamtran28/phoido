@@ -1,4 +1,3 @@
-st.write("SHEET_ID Streamlit đang đọc:", st.secrets["SHEET_ID"])
 import streamlit as st
 import hashlib
 import json
@@ -11,6 +10,7 @@ from PIL import Image
 import io
 import base64
 
+st.write("SHEET_ID Streamlit đang đọc:", st.secrets["SHEET_ID"])
 # ========================= CONFIG =========================
 DRIVE_FOLDER_ID = st.secrets["DRIVE_FOLDER_ID"]
 SHEET_ID = st.secrets["SHEET_ID"]
