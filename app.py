@@ -108,8 +108,8 @@ if img_data:
         # Check duplicate
         dup, old_url = is_duplicate_image(img_hash)
         if dup:
-            st.warning(f"⚠ Ảnh này đã tồn tại trong tủ đồ!  
-                        Link ảnh cũ: {old_url}")
+            st.warning(f"⚠ Ảnh này đã tồn tại trong tủ đồ!\nLink ảnh cũ: {old_url}")
+
         else:
             filename = f"{category}_{style}_{img_hash[:10]}.jpg"
             url = upload_to_drive(filename, img_data)
