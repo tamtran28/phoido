@@ -1,216 +1,138 @@
 import streamlit as st
-from PIL import Image
 import hashlib
-import io
-import random
-import time
-
+import json
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 import gspread
-
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaInMemoryUpload
+from googleapiclient.errors import HttpError
+from PIL import Image
+import io
+import base64
 
 # ========================= CONFIG =========================
-st.set_page_config(page_title="Mix & Match Closet", layout="wide")
+DRIVE_FOLDER_ID = st.secrets["DRIVE_FOLDER_ID"]
+SHEET_ID = st.secrets["SHEET_ID"]
 
-CATEGORIES = ["Áo", "Quần", "Giày", "Phụ kiện"]
-STYLES = ["casual", "sport", "streetwear"]
-
-
-# ========================= HASH IMAGE (CHỐNG TRÙNG) =========================
-def get_image_hash(img_bytes):
-    return hashlib.sha256(img_bytes).hexdigest()
-
-
-# ========================= GOOGLE DRIVE =========================
-def get_drive_service():
-    creds = service_account.Credentials.from_service_account_info(
-        st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"],
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    return build("drive", "v3", credentials=creds)
-
-
-def upload_to_drive(image_bytes, filename, retry=2):
-    drive = get_drive_service()
-    folder_id = st.secrets["DRIVE_FOLDER_ID"]
-
-    media = MediaIoBaseUpload(io.BytesIO(image_bytes), mimetype="image/png")
-
-    for attempt in range(retry + 1):
-        try:
-            # Tạo metadata file Drive
-            file_metadata = {"name": filename, "parents": [folder_id]}
-
-            # Upload ảnh lên Drive
-            uploaded = drive.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields="id"
-            ).execute()
-
-            file_id = uploaded["id"]
-
-            # Cho phép ai cũng xem (public)
-            drive.permissions().create(
-                fileId=file_id,
-                body={"type": "anyone", "role": "reader"}
-            ).execute()
-
-            # URL ảnh trực tiếp
-            url = f"https://drive.google.com/uc?export=view&id={file_id}"
-            return url
-
-        except Exception as e:
-            if attempt == retry:
-                raise e
-            time.sleep(1)  # retry
-
+# Đọc JSON từ secrets → parse lại thành dict
+service_info = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
 
 # ========================= GOOGLE SHEETS =========================
 def get_sheet():
     creds = service_account.Credentials.from_service_account_info(
-        st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"],
+        service_info,
         scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     client = gspread.authorize(creds)
-    return client.open_by_key(st.secrets["SHEET_ID"]).sheet1
+    return client.open_by_key(SHEET_ID).sheet1
 
+# ========================= GOOGLE DRIVE =========================
+def upload_to_drive(filename, img_bytes):
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            service_info,
+            scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        drive = build("drive", "v3", credentials=creds)
 
-def save_item_to_sheet(url, category, style, img_hash):
-    sh = get_sheet()
-    sh.append_row([url, category, style, img_hash])
+        file_metadata = {
+            "name": filename,
+            "parents": [DRIVE_FOLDER_ID]
+        }
 
+        media = MediaInMemoryUpload(img_bytes, mimetype="image/jpeg")
 
+        up = drive.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id"
+        ).execute()
+
+        file_id = up.get("id")
+        return f"https://drive.google.com/uc?id={file_id}"
+    except HttpError as e:
+        st.error(f"Upload lỗi: {e}")
+        return None
+
+# ========================= HASH IMAGE =========================
+def get_image_hash(img_bytes):
+    return hashlib.sha256(img_bytes).hexdigest()
+
+# ========================= LOAD METADATA =========================
 def load_all_metadata():
     sh = get_sheet()
     rows = sh.get_all_values()
     return rows[1:]  # bỏ header
 
-
-def load_items(style_filter=None):
-    rows = load_all_metadata()
-    items = {cat: [] for cat in CATEGORIES}
-
-    for url, cat, style, h in rows:
-        if style_filter and style != style_filter:
-            continue
-        items[cat].append(url)
-
-    return items
-
-
-# ========================= CHECK DUPLICATE IMAGE =========================
+# ========================= CHECK DUPLICATE =========================
 def is_duplicate_image(new_hash):
     rows = load_all_metadata()
-    for url, cat, style, h in rows:
+    for row in rows:
+        url, cat, style, h = row
         if h == new_hash:
             return True, url
     return False, None
 
+# ========================= SAVE METADATA =========================
+def save_metadata(url, category, style, img_hash):
+    sh = get_sheet()
+    sh.append_row([url, category, style, img_hash])
 
 # ========================= UI =========================
-page = st.sidebar.radio(
-    "Chọn tính năng",
-    ["Upload đồ", "Xem tủ đồ", "Gợi ý outfit"]
-)
+st.title("👕 AI Phối Đồ – Lưu Tủ Đồ Google Drive + Sheet")
+st.write("Upload ảnh quần áo, tự động lưu vào Google Drive + Google Sheet, chống trùng ảnh.")
 
+option = st.selectbox("Chọn loại nhập ảnh:", ["📁 Upload file", "📸 Camera"])
 
-# ========================= PAGE: UPLOAD =========================
-if page == "Upload đồ":
-    st.header("📤 Thêm trang phục vào tủ (Lưu Google Drive)")
+img_data = None
 
-    col1, col2 = st.columns(2)
-    category = col1.selectbox("Loại trang phục", CATEGORIES)
-    style = col2.selectbox("Phong cách", STYLES)
+if option == "📁 Upload file":
+    uploaded = st.file_uploader("Chọn ảnh", type=["jpg", "jpeg", "png"])
+    if uploaded:
+        img_data = uploaded.read()
 
-    st.markdown("### 📸 Chụp ảnh bằng camera")
-    camera_img = st.camera_input("Nhấn để chụp ảnh")
+if option == "📸 Camera":
+    cam = st.camera_input("Chụp ảnh")
+    if cam:
+        img_data = cam.getvalue()
 
-    st.markdown("### 📁 Upload ảnh từ máy")
-    upload_img = st.file_uploader("Chọn ảnh", type=["png", "jpg", "jpeg"])
+if img_data:
+    st.image(img_data, caption="Ảnh bạn vừa chọn", use_container_width=True)
 
-    img = None
+    category = st.selectbox("Loại item:", ["top", "bottom", "shoes", "outer"])
+    style = st.selectbox("Phong cách:", ["casual", "sport", "streetwear", "minimal", "korean"])
 
-    if camera_img:
-        img = Image.open(camera_img)
-    elif upload_img:
-        img = Image.open(upload_img)
+    if st.button("Lưu vào tủ đồ"):
+        img_hash = get_image_hash(img_data)
 
-    if img:
-        # Convert sang bytes
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        img_bytes = buf.getvalue()
-
-        # Hash chống trùng
-        img_hash = get_image_hash(img_bytes)
-
-        # Kiểm tra trùng
+        # Check duplicate
         dup, old_url = is_duplicate_image(img_hash)
-
         if dup:
-            st.warning("⚠ Ảnh này đã tồn tại trong tủ đồ!")
-            st.image(old_url, caption="Ảnh đã lưu trước đó", width=250)
-
+            st.warning(f"⚠ Ảnh này đã tồn tại trong tủ đồ!  
+                        Link ảnh cũ: {old_url}")
         else:
-            filename = f"{category}_{style}_{random.randint(1000,9999)}.png"
+            filename = f"{category}_{style}_{img_hash[:10]}.jpg"
+            url = upload_to_drive(filename, img_data)
 
-            try:
-                # Upload Drive
-                url = upload_to_drive(img_bytes, filename)
+            if url:
+                save_metadata(url, category, style, img_hash)
+                st.success("✅ Đã lưu thành công!")
+                st.write("Link ảnh trên Drive:")
+                st.code(url)
 
-                # Lưu metadata
-                save_item_to_sheet(url, category, style, img_hash)
+# ========================= GỢI Ý OUTFIT =========================
+st.header("👗 Gợi ý outfit theo phong cách")
+chosen_style = st.selectbox("Chọn style muốn phối:", 
+                            ["casual", "sport", "streetwear", "minimal", "korean"])
 
-                st.success("✅ Đã lưu lên Google Drive!")
-                st.image(url, width=250)
-
-            except Exception as e:
-                st.error(f"❌ Lỗi upload lên Drive: {e}")
-
-
-# ========================= PAGE: XEM TỦ ĐỒ =========================
-elif page == "Xem tủ đồ":
-    st.header("👕 Tủ đồ của bạn")
-
-    style_filter = st.selectbox("Lọc theo phong cách", ["Tất cả"] + STYLES)
-
-    if style_filter == "Tất cả":
-        items = load_items()
-    else:
-        items = load_items(style_filter)
-
-    for cat in CATEGORIES:
-        st.subheader(cat)
-        cols = st.columns(4)
-        i = 0
-        for url in items[cat]:
-            cols[i % 4].image(url, width=150)
-            i += 1
-
-
-# ========================= PAGE: GỢI Ý OUTFIT =========================
-elif page == "Gợi ý outfit":
-    st.header("🎨 Gợi ý Outfit")
-
-    style_choice = st.selectbox("Chọn phong cách", STYLES)
-
-    items = load_items(style_choice)
-    fallback = load_items()
-
-    outfit = {}
-
-    for cat in CATEGORIES:
-        if items[cat]:
-            outfit[cat] = random.choice(items[cat])
-        elif fallback[cat]:
-            outfit[cat] = random.choice(fallback[cat])
-
-    cols = st.columns(4)
-    i = 0
-    for cat, url in outfit.items():
-        cols[i].subheader(cat)
-        cols[i].image(url, width=200)
-        i += 1
+if st.button("Gợi ý outfit"):
+    if chosen_style == "casual":
+        st.info("👕 Áo thun basic + 👖 quần jean + 👟 sneaker trắng")
+    elif chosen_style == "sport":
+        st.info("🏃 Áo thể thao + quần short training + giày chạy bộ")
+    elif chosen_style == "streetwear":
+        st.info("🧥 Hoodie oversize + jean rách + giày chunky")
+    elif chosen_style == "minimal":
+        st.info("🧶 Áo polo + quần tây slimfit + giày lười trắng")
+    elif chosen_style == "korean":
+        st.info("🧣 Áo sweater + sơ mi bên trong + quần baggy + giày cổ thấp")
