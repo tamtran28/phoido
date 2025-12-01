@@ -15,7 +15,22 @@ DRIVE_FOLDER_ID = st.secrets["DRIVE_FOLDER_ID"]
 SHEET_ID = st.secrets["SHEET_ID"]
 
 # Đọc JSON từ secrets → parse lại thành dict
-service_info = json.loads(st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"])
+service_info = {
+    "type": st.secrets["type"],
+    "project_id": st.secrets["project_id"],
+    "private_key_id": st.secrets["private_key_id"],
+    "private_key": st.secrets["private_key"],
+    "client_email": st.secrets["client_email"],
+    "client_id": st.secrets["client_id"],
+    "token_uri": st.secrets["token_uri"],
+}
+
+creds = service_account.Credentials.from_service_account_info(
+    service_info,
+    scopes=["https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"]
+)
+
 
 # ========================= GOOGLE SHEETS =========================
 def get_sheet():
